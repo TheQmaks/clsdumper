@@ -9,6 +9,7 @@
                                    |_|
 ```
 
+[![PyPI](https://img.shields.io/pypi/v/clsdumper.svg)](https://pypi.org/project/clsdumper/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -28,8 +29,8 @@ clsdumper hooks into a running (or freshly spawned) Android application and extr
 ## Quick Start
 
 ```bash
-# Install from source
-pip install .
+# Install from PyPI
+pip install clsdumper
 
 # Dump DEX from a running app (USB-connected device)
 clsdumper com.example.app

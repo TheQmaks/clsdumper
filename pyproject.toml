@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "clsdumper"
+version = "0.1.0"
+description = "Android Dynamic Class Dumper — dump all DEX files and classes from running Android apps"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "clsdumper contributors" },
+]
+keywords = ["android", "frida", "dex", "reverse-engineering", "class-dumper"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Software Development :: Disassemblers",
+]
+dependencies = [
+    "frida>=16.0.0",
+    "frida-tools>=12.0.0",
+    "androguard>=4.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/TheQmaks/clsdumper"
+Repository = "https://github.com/TheQmaks/clsdumper"
+Issues = "https://github.com/TheQmaks/clsdumper/issues"
+
+[project.scripts]
+clsdumper = "clsdumper.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["clsdumper"]

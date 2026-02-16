@@ -3,9 +3,11 @@
  * These are fallback values derived from AOSP source code.
  * The OffsetResolver will try dynamic resolution first.
  *
- * NOTE: dexFileBeginOffset is NOT hardcoded here because it varies
- * across Android versions and OEM builds. The OffsetResolver's
- * probeDexFileOffsets() dynamically finds it by scanning for DEX magic.
+ * NOTE: dexFileBeginOffset is resolved dynamically via three methods:
+ * - Level 1b: ClassLinker heuristic (Runtime → ClassLinker → DexFile → begin_)
+ * - Level 3: Memory probing (finds DEX in memory, searches for DexFile structs)
+ * - Cookie strategy: probes DexFile* from mCookie at runtime
+ * Hardcoding it here is unsafe as it varies across OEM builds.
  */
 
 export interface ArtOffsets {

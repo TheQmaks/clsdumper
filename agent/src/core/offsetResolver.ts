@@ -1,7 +1,7 @@
 import { ArtOffsets, ART_ACCESSOR_SYMBOLS, STATIC_OFFSETS_ARM64, STATIC_OFFSETS_ARM32 } from '../config/offsets.js';
 import { logger } from '../utils/logger.js';
-import { safeReadPointer, isValidPointer } from '../utils/memoryUtils.js';
-import { DEX_MAGIC } from '../config/constants.js';
+import { safeReadPointer, isValidPointer, validateDexHeader } from '../utils/memoryUtils.js';
+import { DEX_MAGIC, DEX_MAGIC_BYTES } from '../config/constants.js';
 
 /**
  * Multi-level ART offset resolver.
@@ -306,10 +306,133 @@ export class OffsetResolver {
     }
 
     /**
-     * Level 3: Find DexFile::begin_ offset by probing for DEX magic.
+     * Level 3: Find DexFile::begin_ offset by scanning memory for DEX magic.
+     *
+     * Bottom-up approach (unlike Level 1b which goes top-down from Runtime):
+     * 1. Find a standard DEX file in mapped regions (APK/VDEX/OAT) or anonymous memory
+     * 2. Scan process memory for pointers to that DEX address (these are begin_ fields)
+     * 3. Verify each candidate by checking that the adjacent field matches file size
+     * 4. Determine offset within the DexFile struct via probeDexFileOffsets()
      */
     resolveFromDexMagic(): Partial<ArtOffsets> | null {
+        logger.debug('OFFSETS', 'Level 3: Probing for DexFile::begin_ via memory scan...');
+
+        // Step 1: Find a standard DEX file in memory
+        const dexInfo = this.findDexInMemory();
+        if (!dexInfo) {
+            logger.debug('OFFSETS', 'Level 3: No standard DEX files found in memory');
+            return null;
+        }
+
+        logger.debug('OFFSETS', `Level 3: Found DEX at ${dexInfo.address} (${dexInfo.fileSize} bytes)`);
+
+        // Step 2: Build a scan pattern for the pointer value (little-endian bytes)
+        const ptrPattern = this.pointerToScanPattern(dexInfo.address);
+
+        // Step 3: Scan readable memory for this pointer value.
+        // DexFile structs are heap-allocated or in libart.so .data/.bss sections.
+        const ranges = Process.enumerateRanges('r--');
+        for (const range of ranges) {
+            if (range.size < this.pointerSize * 4 || range.size > 64 * 1024 * 1024) continue;
+
+            let matches: MemoryScanMatch[];
+            try {
+                matches = Memory.scanSync(range.base, range.size, ptrPattern);
+            } catch {
+                continue;
+            }
+
+            for (const m of matches) {
+                // m.address holds a pointer to our DEX bytes.
+                // Verify: the next pointer-sized field should be size_t matching file size.
+                try {
+                    const sizeVal = this.pointerSize === 8
+                        ? m.address.add(this.pointerSize).readU64().toNumber()
+                        : m.address.add(this.pointerSize).readU32();
+                    if (sizeVal !== dexInfo.fileSize) continue;
+                } catch {
+                    continue;
+                }
+
+                // Confirmed begin_/size_ pair. Find struct base by probing backwards.
+                // Start from pointerSize: offset 0 is always the vtable pointer
+                // (DexFile has virtual ~DexFile()), and off=0 would tautologically
+                // match the pointer we already found.
+                for (let off = this.pointerSize; off <= 64; off += this.pointerSize) {
+                    try {
+                        const candidateBase = m.address.sub(off);
+                        const probed = this.probeDexFileOffsets(candidateBase);
+                        if (probed && probed.dexFileBeginOffset === off) {
+                            logger.info('OFFSETS', `Level 3: DexFile::begin_ at +0x${off.toString(16)}`);
+                            return probed;
+                        }
+                    } catch {
+                        continue;
+                    }
+                }
+            }
+        }
+
+        logger.debug('OFFSETS', 'Level 3: Could not determine DexFile::begin_ offset');
         return null;
+    }
+
+    /**
+     * Find a standard DEX file in process memory.
+     * Scans mapped files first (.apk, .jar, .vdex, .oat), then anonymous regions.
+     */
+    private findDexInMemory(): { address: NativePointer; fileSize: number } | null {
+        const ranges = Process.enumerateRanges('r--');
+        const fileExts = ['.apk', '.jar', '.vdex', '.oat'];
+
+        // Phase 1: Scan file-backed regions (fast — boot classpath is always present)
+        for (const range of ranges) {
+            if (range.size < 0x70 || range.size > 64 * 1024 * 1024) continue;
+            const path = range.file?.path;
+            if (!path || !fileExts.some(ext => path.endsWith(ext))) continue;
+
+            try {
+                const matches = Memory.scanSync(range.base, range.size, DEX_MAGIC_BYTES);
+                for (const match of matches) {
+                    const fileSize = validateDexHeader(match.address);
+                    if (fileSize > 0) return { address: match.address, fileSize };
+                }
+            } catch {
+                continue;
+            }
+        }
+
+        // Phase 2: Scan anonymous regions (catches packed/decrypted DEX in memory)
+        for (const range of ranges) {
+            if (range.size < 0x70 || range.size > 8 * 1024 * 1024) continue;
+            if (range.file?.path) continue;
+
+            try {
+                const matches = Memory.scanSync(range.base, range.size, DEX_MAGIC_BYTES);
+                for (const match of matches) {
+                    const fileSize = validateDexHeader(match.address);
+                    if (fileSize > 0) return { address: match.address, fileSize };
+                }
+            } catch {
+                continue;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Convert a NativePointer value to a hex pattern for Memory.scanSync.
+     * Writes the pointer in native byte order (little-endian on ARM).
+     */
+    private pointerToScanPattern(p: NativePointer): string {
+        const buf = Memory.alloc(this.pointerSize);
+        buf.writePointer(p);
+        const parts: string[] = [];
+        for (let i = 0; i < this.pointerSize; i++) {
+            parts.push(buf.add(i).readU8().toString(16).padStart(2, '0'));
+        }
+        return parts.join(' ');
     }
 
     /**
